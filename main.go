@@ -14,7 +14,6 @@ import (
 func main() {
 	searcher := Searcher{indexPath: "shakesearch.bleve"}
 	err := searcher.Load("completeworks.txt")
-	// err := searcher.Load("README.md")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -63,37 +62,59 @@ func handleSearch(searcher Searcher) func(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Searcher) Load(filename string) error {
+	batchSize := 1000
 
 	fmt.Println("loading file")
 	index, err := bleve.Open(s.indexPath)
-	if err != nil {
+	defer index.Close()
+	if err == bleve.ErrorIndexPathDoesNotExist {
 		mapping := bleve.NewIndexMapping()
 		index, err = bleve.New(s.indexPath, mapping)
 		if err != nil {
 			fmt.Println(err)
 			fmt.Errorf("Create index: %w", err)
 		}
-	}
-	defer index.Close()
-	file, err := os.Open(filename)
-	if err != nil {
-		fmt.Errorf("Open file: %w", err)
-	}
-	defer file.Close()
+		file, err := os.Open(filename)
+		if err != nil {
+			fmt.Errorf("Open file: %w", err)
+		}
+		defer file.Close()
 
-	// Start reading from the file using a scanner.
-	scanner := bufio.NewScanner(file)
-	linecount := 0
-	for scanner.Scan() {
-		line := scanner.Text()
-		index.Index(fmt.Sprintf("line: %d. %s", linecount, line), line)
-		linecount += 1
-		fmt.Println(linecount)
+		batch := index.NewBatch()
+		batchCount := 0
+
+		// Start reading from the file using a scanner.
+		scanner := bufio.NewScanner(file)
+		linecount := 0
+		for scanner.Scan() {
+			line := scanner.Text()
+			batch.Index(fmt.Sprintf("line: %d. %s", linecount, line), line)
+			batchCount++
+
+			if batchCount >= batchSize {
+				err = index.Batch(batch)
+				if err != nil {
+					return err
+				}
+				batch = index.NewBatch()
+				batchCount = 0
+			}
+
+			linecount += 1
+			fmt.Println(linecount)
+		}
+		if batchCount > 0 {
+			err = index.Batch(batch)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
 	}
 	return nil
 }
 
 func (s *Searcher) Search(query string) []string {
+	fmt.Println("search for: ",query)
 	results := []string{}
 	index, err := bleve.Open(s.indexPath)
 	defer index.Close()
@@ -101,8 +122,7 @@ func (s *Searcher) Search(query string) []string {
 		fmt.Println(err)
 		return nil
 	}
-	fmt.Println("open index")
-	q := bleve.NewMatchQuery(query)
+	q := bleve.NewFuzzyQuery(query)
 	search := bleve.NewSearchRequest(q)
 	sr, err := index.Search(search)
 	if err != nil {
