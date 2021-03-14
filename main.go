@@ -1,19 +1,20 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"index/suffixarray"
-	"io/ioutil"
+	"github.com/blevesearch/bleve/v2"
 	"log"
 	"net/http"
 	"os"
 )
 
 func main() {
-	searcher := Searcher{}
+	searcher := Searcher{indexPath: "shakesearch.bleve"}
 	err := searcher.Load("completeworks.txt")
+	// err := searcher.Load("README.md")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -36,8 +37,7 @@ func main() {
 }
 
 type Searcher struct {
-	CompleteWorks string
-	SuffixArray   *suffixarray.Index
+	indexPath string
 }
 
 func handleSearch(searcher Searcher) func(w http.ResponseWriter, r *http.Request) {
@@ -63,20 +63,58 @@ func handleSearch(searcher Searcher) func(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Searcher) Load(filename string) error {
-	dat, err := ioutil.ReadFile(filename)
+
+	fmt.Println("loading file")
+	index, err := bleve.Open(s.indexPath)
 	if err != nil {
-		return fmt.Errorf("Load: %w", err)
+		mapping := bleve.NewIndexMapping()
+		index, err = bleve.New(s.indexPath, mapping)
+		if err != nil {
+			fmt.Println(err)
+			fmt.Errorf("Create index: %w", err)
+		}
 	}
-	s.CompleteWorks = string(dat)
-	s.SuffixArray = suffixarray.New(dat)
+	defer index.Close()
+	file, err := os.Open(filename)
+	if err != nil {
+		fmt.Errorf("Open file: %w", err)
+	}
+	defer file.Close()
+
+	// Start reading from the file using a scanner.
+	scanner := bufio.NewScanner(file)
+	linecount := 0
+	for scanner.Scan() {
+		line := scanner.Text()
+		index.Index(fmt.Sprintf("line: %d. %s", linecount, line), line)
+		linecount += 1
+		fmt.Println(linecount)
+	}
 	return nil
 }
 
 func (s *Searcher) Search(query string) []string {
-	idxs := s.SuffixArray.Lookup([]byte(query), -1)
 	results := []string{}
-	for _, idx := range idxs {
-		results = append(results, s.CompleteWorks[idx-250:idx+250])
+	index, err := bleve.Open(s.indexPath)
+	defer index.Close()
+	if err != nil {
+		fmt.Println(err)
+		return nil
+	}
+	fmt.Println("open index")
+	q := bleve.NewMatchQuery(query)
+	search := bleve.NewSearchRequest(q)
+	sr, err := index.Search(search)
+	if err != nil {
+		fmt.Println(err)
+		return nil
+	}
+
+	rv := fmt.Sprintf("%d matches, showing %d through %d, took %s\n", sr.Total, sr.Request.From+1, sr.Request.From+len(sr.Hits), sr.Took)
+	results = append(results, rv)
+
+	for i, hit := range sr.Hits {
+		results = append(results, fmt.Sprintf("%5d. %s (%f)\n", i+sr.Request.From+1, hit.ID, hit.Score))
 	}
 	return results
 }
