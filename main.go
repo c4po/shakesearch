@@ -114,7 +114,7 @@ func (s *Searcher) Load(filename string) error {
 }
 
 func (s *Searcher) Search(query string) []string {
-	fmt.Println("search for: ",query)
+	fmt.Println("search for: ", query)
 	results := []string{}
 	index, err := bleve.Open(s.indexPath)
 	defer index.Close()
