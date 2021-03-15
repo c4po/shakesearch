@@ -17,7 +17,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	fs := http.FileServer(http.Dir("./static"))
 	http.Handle("/", fs)
 
@@ -62,54 +61,56 @@ func handleSearch(searcher Searcher) func(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Searcher) Load(filename string) error {
-	batchSize := 1000
+	go func() {
+		batchSize := 1000
 
-	fmt.Println("loading file")
-	index, err := bleve.Open(s.indexPath)
-	defer index.Close()
-	if err == bleve.ErrorIndexPathDoesNotExist {
-		mapping := bleve.NewIndexMapping()
-		index, err = bleve.New(s.indexPath, mapping)
-		if err != nil {
-			fmt.Println(err)
-			fmt.Errorf("Create index: %w", err)
-		}
-		file, err := os.Open(filename)
-		if err != nil {
-			fmt.Errorf("Open file: %w", err)
-		}
-		defer file.Close()
+		fmt.Println("loading file")
+		index, err := bleve.Open(s.indexPath)
+		if err == bleve.ErrorIndexPathDoesNotExist {
+			mapping := bleve.NewIndexMapping()
+			index, err = bleve.New(s.indexPath, mapping)
+			if err != nil {
+				fmt.Println(err)
+				fmt.Errorf("Create index: %w", err)
+			}
+			file, err := os.Open(filename)
+			if err != nil {
+				fmt.Errorf("Open file: %w", err)
+			}
 
-		batch := index.NewBatch()
-		batchCount := 0
+			batch := index.NewBatch()
+			batchCount := 0
 
-		// Start reading from the file using a scanner.
-		scanner := bufio.NewScanner(file)
-		linecount := 0
-		for scanner.Scan() {
-			line := scanner.Text()
-			batch.Index(fmt.Sprintf("line: %d. %s", linecount, line), line)
-			batchCount++
+			// Start reading from the file using a scanner.
+			scanner := bufio.NewScanner(file)
+			linecount := 0
+			for scanner.Scan() {
+				line := scanner.Text()
+				batch.Index(fmt.Sprintf("line: %d. %s", linecount, line), line)
+				batchCount++
 
-			if batchCount >= batchSize {
+				if batchCount >= batchSize {
+					err = index.Batch(batch)
+					if err != nil {
+						fmt.Println(err)
+					}
+					batch = index.NewBatch()
+					batchCount = 0
+				}
+
+				linecount += 1
+				fmt.Println(linecount)
+			}
+			if batchCount > 0 {
 				err = index.Batch(batch)
 				if err != nil {
-					return err
+					fmt.Println(err)
 				}
-				batch = index.NewBatch()
-				batchCount = 0
 			}
-
-			linecount += 1
-			fmt.Println(linecount)
+			file.Close()
 		}
-		if batchCount > 0 {
-			err = index.Batch(batch)
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-	}
+		index.Close()
+	}()
 	return nil
 }
 
